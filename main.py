@@ -12,9 +12,8 @@ dynamodb = boto3.resource('dynamodb', region_name='ap-northeast-2')
 table = dynamodb.Table('Reservations')
 bookstore_table = dynamodb.Table('BookstoreEmails')  # 서점 이메일 테이블
 
-# SNS 클라이언트 초기화
-sns_client = boto3.client('sns', region_name='ap-northeast-2')  # region 설정 필요
-sns_topic_arn = 'arn:aws:sns:ap-northeast-2:178020491921:success-reservation'  # 생성한 SNS 주제 ARN
+# SES 클라이언트 초기화
+ses_client = boto3.client('ses', region_name='ap-northeast-2')
 
 def get_current_timestamp():
     # 현재 시간을 타임스탬프로 반환
@@ -75,30 +74,52 @@ def get_email_from_bookstore(bookstore):
     except (BotoCoreError, ClientError) as e:
         return str(e)
 
-def send_sns_email(bookstore, date, time, customer, timestamp):
+def send_ses_email(bookstore, date, time, customer, timestamp):
     try:
         # Bookstore 이름으로 이메일 주소 조회
         email = get_email_from_bookstore(bookstore)
         if not email:
             return f"No email found for bookstore: {bookstore}"
         
-        # SNS 메시지 생성
-        message = f"New reservation created:\n\nBookstore: {bookstore}\nDate: {date}\nTime: {time}\nCustomer: {customer}\nReservation Time: {timestamp}\n"
-        response = sns_client.publish(
-            TopicArn=sns_topic_arn,
-            Message=message,
-            Subject="New Reservation Created",
-            MessageAttributes={
-                'customer': {
-                    'DataType': 'String',
-                    'StringValue': customer
+        # SES 이메일 전송
+        response = ses_client.send_email(
+            Source='jth0202@naver.com',  # SES에서 인증된 이메일 주소로 변경
+            Destination={
+                'ToAddresses': [email],
+            },
+            Message={
+                'Subject': {
+                    'Data': 'New Reservation Created(bookstore CEO)',
+                    'Charset': 'UTF-8'
                 },
-                'bookstore': {
-                    'DataType': 'String',
-                    'StringValue': bookstore
+                'Body': {
+                    'Text': {
+                        'Data': f"New reservation created:\n\nBookstore: {bookstore}\nDate: {date}\nTime: {time}\nCustomer: {customer}\nReservation Time: {timestamp}",
+                        'Charset': 'UTF-8'
+                    }
                 }
             }
         )
+
+        response = ses_client.send_email(
+            Source='jth0202@naver.com',  # SES에서 인증된 이메일 주소로 변경
+            Destination={
+                'ToAddresses': [customer],
+            },
+            Message={
+                'Subject': {
+                    'Data': 'New Reservation Created(Customer)',
+                    'Charset': 'UTF-8'
+                },
+                'Body': {
+                    'Text': {
+                        'Data': f"New reservation created:\n\nBookstore: {bookstore}\nDate: {date}\nTime: {time}\nCustomer: {customer}\nReservation Time: {timestamp}",
+                        'Charset': 'UTF-8'
+                    }
+                }
+            }
+        )
+
         return response
     except (BotoCoreError, ClientError) as e:
         return str(e)
@@ -138,12 +159,13 @@ def reservations():
         if isinstance(result, str):  # 오류 메시지 처리
             return jsonify({"error": result}), 500
 
-        # 예약 생성 후 SNS를 통해 이메일 알림 전송
-        sns_result = send_sns_email(bookstore, date, time, customer, timestamp)
-        if isinstance(sns_result, str):  # 오류 메시지 처리
-            return jsonify({"error": sns_result}), 500
+        # 예약 생성 후 SES를 통해 이메일 알림 전송
+        ses_result = send_ses_email(bookstore, date, time, customer, timestamp)
+        if isinstance(ses_result, str):  # 오류 메시지 처리
+            return jsonify({"error": ses_result}), 500
 
         return jsonify({"message": "Reservation created successfully, email notification sent"}), 201
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
 
