@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: "bookstore-ingress"
+  labels:
+    app.kubernetes.io/name: "bookstore-ingress"
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /reservations
+ 
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - pathType: Prefix
+            path: /reservations
+            backend:
+              service:
+                name: reservation-svc
+                port:
+                  number: 8080
+          - pathType: Prefix
+            path: /recommend
+            backend:
+              service:
+                name: recommend-svc
+                port:
+                  number: 5000

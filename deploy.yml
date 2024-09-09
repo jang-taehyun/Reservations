@@ -1,33 +1,8 @@
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: "reservation-ingress"
-  labels:
-    app.kubernetes.io/name: "reservation-ingress"
-  annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/healthcheck-path: /reservations
- 
-spec:
-  ingressClassName: alb
-  rules:
-    - http:
-        paths:
-          - pathType: Prefix
-            path: /
-            backend:
-              service:
-                name: reservation-svc
-                port:
-                  number: 8080
----
 apiVersion: v1
 kind: Service
 metadata:
   name: reservation-svc
 spec:
-  type: LoadBalancer
   selector:
     app: reservation-app
   ports:
