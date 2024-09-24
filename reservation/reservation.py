@@ -16,54 +16,61 @@ bookstore_table = dynamodb.Table('BookstoreEmails')  # 서점 이메일 테이�
 ses_client = boto3.client('ses', region_name='ap-northeast-2')
 
 def get_current_timestamp():
-    # 현재 시간을 타임스탬프로 반환
     return int(time.time())
 
-def query_reservations(bookstore, date):
+def get_next_reservation_id(bookstore):
     try:
-        # DynamoDB에서 KeyConditionExpression 설정
+        # 가장 큰 ReservationID를 찾아 다음 ID를 계산
         response = table.query(
-            KeyConditionExpression=Key('BookstoreName').eq(bookstore) & Key('Date').eq(date)
+            KeyConditionExpression=Key('BookstoreName').eq(bookstore),
+            ProjectionExpression="ReservationID",
+            ScanIndexForward=False,  # 내림차순으로 조회
+            Limit=1  # 가장 큰 ReservationID 하나만 가져옴
         )
+        items = response.get('Items', [])
+        if items:
+            return items[0]['ReservationID'] + 1
+        else:
+            return 1  # 첫 예약이라면 ReservationID는 1로 시작
+    except (BotoCoreError, ClientError) as e:
+        return str(e)
 
+def query_reservations(bookstore, date, time_slot):
+    try:
+        # DynamoDB에서 같은 서점, 날짜, 시간에 예약이 있는지 확인
+        response = table.scan(
+            FilterExpression=Key('BookstoreName').eq(bookstore) & Key('Date').eq(date) & Key('Time').eq(time_slot)
+        )
         return response.get('Items', [])
     except (BotoCoreError, ClientError) as e:
         return str(e)
     
-def generate_time_slots(reservations):
-    # 09:00부터 18:00까지 1시간 단위로 시간대를 생성
-    start_time = datetime.strptime("09:00", "%H:%M")
-    time_slots = []
-    
-    for i in range(10):  # 09:00부터 18:00까지 10개의 슬롯
-        time_str = (start_time + timedelta(hours=i)).strftime("%H:%M")
-        
-        # 해당 시간에 예약이 있는지 확인
-        is_reserved = any(reservation['Time'] == time_str for reservation in reservations)
-        
-        # 예약이 없으면 true, 예약이 있으면 false
-        time_slots.append({
-            "time": time_str,
-            "isReservation": not is_reserved
-        })
-    
-    return time_slots
-    
-def create_reservation(bookstore, date, time, customer, timestamp):
+def create_reservation(bookstore, date, time_slot, customer, timestamp):
+    # 먼저 예약 중복 확인
+    existing_reservations = query_reservations(bookstore, date, time_slot)
+    if existing_reservations:
+        return "Error: Reservation already exists for this time."
+
+    # 다음 ReservationID를 가져옴
+    reservation_id = get_next_reservation_id(bookstore)
+    if isinstance(reservation_id, str):  # 오류 발생 시
+        return reservation_id
+
     try:
+        # 중복이 없을 경우 새로 예약 생성
         response = table.put_item(
             Item={
                 'BookstoreName': bookstore,
+                'ReservationID': reservation_id,
                 'Date': date,
-                'Time': time,
+                'Time': time_slot,
                 'Customer': customer,
                 'Timestamp': timestamp
             }
         )
         return response
-    except (BotoCoreError, ClientError) as e:
+    except ClientError as e:
         return str(e)
-
 
 def get_email_from_bookstore(bookstore):
     try:
@@ -89,7 +96,7 @@ def send_ses_email(bookstore, date, time, customer, timestamp):
             },
             Message={
                 'Subject': {
-                    'Data': 'New Reservation Created(bookstore CEO)',
+                    'Data': 'New Reservation Created (Bookstore CEO)',
                     'Charset': 'UTF-8'
                 },
                 'Body': {
@@ -108,7 +115,7 @@ def send_ses_email(bookstore, date, time, customer, timestamp):
             },
             Message={
                 'Subject': {
-                    'Data': 'New Reservation Created(Customer)',
+                    'Data': 'New Reservation Created (Customer)',
                     'Charset': 'UTF-8'
                 },
                 'Body': {
@@ -123,6 +130,25 @@ def send_ses_email(bookstore, date, time, customer, timestamp):
         return response
     except (BotoCoreError, ClientError) as e:
         return str(e)
+    
+def generate_time_slots(reservations):
+    # 09:00부터 18:00까지 1시간 단위로 시간대를 생성
+    start_time = datetime.strptime("09:00", "%H:%M")
+    time_slots = []
+    
+    for i in range(10):  # 09:00부터 18:00까지 10개의 슬롯
+        time_str = (start_time + timedelta(hours=i)).strftime("%H:%M")
+        
+        # 해당 시간에 예약이 있는지 확인
+        is_reserved = any(reservation['Time'] == time_str for reservation in reservations)
+        
+        # 예약이 있으면 true, 예약이 없으면 false
+        time_slots.append({
+            "time": time_str,
+            "isReservation": is_reserved
+        })
+    
+    return time_slots
 
 @app.route('/reservations', methods=['GET', 'POST'])
 def reservations():
@@ -131,16 +157,20 @@ def reservations():
         date = request.args.get('date')
         if not bookstore or not date:
             return jsonify({"error": "Missing required parameters"}), 400
-        
-        # DynamoDB에서 예약 조회
-        result = query_reservations(bookstore, date)
-        if isinstance(result, str):  # 오류 메시지 처리
-            return jsonify({"error": result}), 500
 
-        # 조회된 데이터를 기반으로 시간대 및 예약 가능 여부 생성
-        time_slots = generate_time_slots(result)
-        
-        return jsonify(time_slots), 200
+        # DynamoDB에서 해당 서점 및 날짜에 예약된 항목 조회
+        try:
+            response = table.scan(
+                FilterExpression=Key('BookstoreName').eq(bookstore) & Key('Date').eq(date)
+            )
+            items = response.get('Items', [])
+            
+            # 예약된 항목을 기반으로 시간대 및 예약 여부 생성
+            time_slots = generate_time_slots(items)
+
+            return jsonify(time_slots), 200
+        except (BotoCoreError, ClientError) as e:
+            return jsonify({"error": str(e)}), 500 
 
     elif request.method == 'POST':
         try:
@@ -166,6 +196,9 @@ def reservations():
 
         return jsonify({"message": "Reservation created successfully, email notification sent"}), 201
 
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy", "message": "The reservation application is running normally"}), 200
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
-

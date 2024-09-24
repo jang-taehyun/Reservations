@@ -26,4 +26,4 @@ spec:
     spec:
       containers:
       - name: reservation-con
-        image: 178020491921.dkr.ecr.ap-northeast-2.amazonaws.com/reservationapp:2.0
+        image: 178020491921.dkr.ecr.ap-northeast-2.amazonaws.com/reservationapp:3.0
