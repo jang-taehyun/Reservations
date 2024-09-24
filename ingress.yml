@@ -27,3 +27,10 @@ spec:
                 name: recommend-svc
                 port:
                   number: 5000
+          - pathType: Prefix
+            path: /mypage
+            backend:
+              service:
+                name: mypage-svc
+                port:
+                  number: 8080
